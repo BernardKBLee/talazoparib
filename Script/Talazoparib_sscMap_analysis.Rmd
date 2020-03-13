@@ -1,0 +1,1052 @@
+---
+title: "Talazoparib"
+author: "Bernard Lee"
+date: "2020-02-26"
+output: html_notebook
+editor_options: 
+  chunk_output_type: inline
+---
+
+###Load library
+```{r}
+library(tidyverse)
+```
+
+
+### Load GDSC 1000 gene expression data
+```{r}
+GDSC1000 <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2019/PLX4720/Output/GDSC1000_GE_original_collapsed_edited_WC.txt", header = TRUE, check.names = FALSE, row.names = 1)
+```
+
+#### Load sen and resistant file names
+```{r}
+sen_file <- list.files(path = "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/70Percent/Sen", pattern = ".txt", full.names = TRUE)
+res_file <- list.files(path = "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/70Percent/Res", pattern = ".txt", full.names = TRUE)
+```
+
+#### limma analysis
+```{r}
+sen_idx <- read.delim(sen_file[10], header = FALSE)
+sen_GE_idx <- colnames(GDSC1000) %in% sen_idx$V1
+sen_GE <- GDSC1000[, sen_GE_idx]
+dim(sen_GE)
+
+res_idx <- read.delim(res_file[10], header = FALSE)
+res_GE_idx <- colnames(GDSC1000) %in% res_idx$V1
+res_GE <- GDSC1000[, res_GE_idx]
+
+GE_combi <- cbind(sen_GE, res_GE)
+dim(GE_combi)
+
+library(limma)
+
+sampl <- factor(c(rep("Sensitive", 16), rep("Resistant", 16)))
+design.mat <- model.matrix(~0 +sampl)
+colnames(design.mat) <- levels(sampl)
+design.mat
+
+contrast.mat <- makeContrasts(
+  Diff = Sensitive - Resistant,
+  levels = design.mat
+)
+contrast.mat
+
+fit <- lmFit(GE_combi, design.mat)
+fit2 <- contrasts.fit(fit, contrast.mat)
+fit3 <- eBayes(fit2)
+
+DEG <- topTable(fit3, coef = 'Diff', number = nrow(GE_combi), adjust.method = 'fdr', sort.by = 't')
+DEG$GeneName <- rownames(DEG)
+DEG <- DEG[, c(7, 1:6)]
+
+write.table(DEG, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/_Talazoparib_10_70percent_limma.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+```
+
+#### DEG identification
+```{r}
+# Read in the files
+GSE <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/_Talazoparib_10_70percent_limma.txt", header = TRUE, row.names = 1)
+head(GSE)
+GSE$lgtranspvalue <- -log10(GSE$P.Value)
+head(GSE)
+
+par(pch = 16)
+par(pty = "s")
+
+# Plotting the figures
+plot(GSE$logFC, GSE$lgtranspvalue, main='Talazoparib - Sensitive (16) vs Resistant (16)', xlab=expression('lg'[2]*'FC'), ylab=expression('-lg'[10]*'pvalue'),cex.lab=1.2)
+with(subset(GSE, logFC < 0 & lgtranspvalue >= (2/-logFC)), points(logFC,lgtranspvalue, col = "red"))
+with(subset(GSE, logFC > 0 & lgtranspvalue >= (2/logFC)), points(logFC,lgtranspvalue, col = "blue"))
+
+# Add legend
+#legend("bottomright",legend=c(expression(paste('DOWN: lg'[2]*'FC<0 & -lg'[10]*'pvalue>=(2/-lg'[2]*'FC)')), expression(paste('UP: lg'[2]*'FC>0 & -lg'[10]*'pvalue>=(2/lg'[2]*'FC)'))),pch = 16, col=c("red", "blue"))
+
+# Draw lines -------------------------------------------------------------------
+xpos <- seq(0, 4, 0.01)
+xneg <- seq(-4, 0, 0.01)
+points(xpos, 2/xpos, type="l")
+points(xneg, -2/xneg, type="l")
+
+# Save down-regulated genes ----------------------------------------------------
+GSE_DOWN <- subset(GSE, logFC < 0 & -log10(P.Value)>=(2/-logFC) , select=c(logFC, P.Value))
+GSE_DOWN <- GSE_DOWN[order(GSE_DOWN$logFC), ]
+nrow(GSE_DOWN)
+GSE_DOWN$GeneName <- rownames(GSE_DOWN)
+GSE_DOWN <- GSE_DOWN[, c(3, 1:2)]
+head(GSE_DOWN)
+write.table(GSE_DOWN, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/_Talazoparib_limma_DOWN10.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+
+# Save up-regulated genes ------------------------------------------------------
+GSE_UP <- subset(GSE, logFC > 0 & -log10(P.Value)>=(2/logFC) , select=c(logFC, P.Value))
+GSE_UP <- GSE_UP[order(GSE_UP$logFC, decreasing = TRUE), ]
+nrow(GSE_UP)
+GSE_UP$GeneName <- rownames(GSE_UP)
+GSE_UP <- GSE_UP[, c(3, 1:2)]
+head(GSE_UP)
+write.table(GSE_UP, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/_Talazoparib_limma_UP10.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+```
+
+## Core genes
+```{r}
+dn_files <- list.files("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/limma_DN/", pattern = ".txt", full.names = TRUE)
+up_files <- list.files("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/limma_UP/", pattern = ".txt", full.names = TRUE)
+
+master <- read.delim(dn_files[1])
+master$Down1 <- "1"
+master <- master[, -c(2:3)]
+
+# Subsequent dn files
+dn_dn <- read.delim(dn_files[10])
+dn_dn$Down10 <- "1"
+dn_dn <- dn_dn[, -c(2:3)]
+
+
+# Merge dn genes
+#master_dn <- full_join(master, dn_dn)
+master_dn <- full_join(master_dn, dn_dn)
+
+# Remove NA dn genes
+master_dn[is.na(master_dn)] <- "0"
+write.table(master_dn, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/__Core_DN_genes2.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+
+
+master <- read.delim(up_files[1])
+master$Up1 <- "1"
+master <- master[, -c(2:3)]
+
+# Subsequent dn files
+up_up <- read.delim(up_files[10])
+up_up$Up10 <- "1"
+up_up <- up_up[, -c(2:3)]
+
+# Merge dn genes
+#master_up <- full_join(master, up_up)
+master_up <- full_join(master_up, up_up)
+
+# Remove NA dn genes
+master_up[is.na(master_up)] <- "0"
+write.table(master_up, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/__Core_UP_genes.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+#### Compile GE for CV
+#### Load sen and resistant file names
+```{r}
+sen_file <- list.files(path = "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/30Percent/Sen", pattern = ".txt", full.names = TRUE)
+res_file <- list.files(path = "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/30Percent/Res", pattern = ".txt", full.names = TRUE)
+
+sen_idx <- read.delim(sen_file[10], header = FALSE)
+sen_GE_idx <- colnames(GDSC1000) %in% sen_idx$V1
+sen_GE <- GDSC1000[, sen_GE_idx]
+
+res_idx <- read.delim(res_file[10], header = FALSE)
+res_GE_idx <- colnames(GDSC1000) %in% res_idx$V1
+res_GE <- GDSC1000[, res_GE_idx]
+
+GE_combi <- cbind(sen_GE, res_GE)
+GE_combi$GeneName <- rownames(GE_combi)
+GE_combi <- GE_combi[, c(13, 1:12)]
+head(GE_combi)
+write.table(GE_combi, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/GE/_Talazoparib_10_30percent_GE.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+```
+
+#### Load ref profile
+```{r}
+dat <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/GE/_Talazoparib_08_30percent_GE.txt", header = TRUE, check.names = FALSE)
+```
+
+#### Create dummby table 
+```{r}
+sscMap_Output <- data.frame(matrix(data = NA, nrow = ncol(dat) - 1, ncol = 3))
+colnames(sscMap_Output) <- c("Sample", "Sum_SRank", "CScore")
+sscMap_Output$Sample <- names(dat[2:length(dat)])
+```
+
+#### Load signatures
+```{r}
+query_up_sscMap <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/limma_UP/_Talazoparib_limma_UP08.txt", header = TRUE)
+#query_up_sscMap$logFC <- 1
+
+query_dn_sscMap <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/limma_DN/_Talazoparib_limma_DOWN08.txt", header = TRUE)
+#query_dn_sscMap$logFC <- -1
+
+query_Sig <- bind_rows(query_up_sscMap, query_dn_sscMap)
+query_Sig$GeneName <- as.character(query_Sig$GeneName)
+query_Sig <- query_Sig[order(abs(query_Sig$logFC), decreasing = TRUE), ]
+
+query_Sig$Query_signedRank_Ordered <- sign(query_Sig$logFC) * (length(query_Sig$GeneName): 1)
+query_Sig_Ordered <- query_Sig[, -c(2,3)]
+```
+
+#### sscMap order analysis starts
+```{r}
+for (i in 2:length(dat)) {
+  dat_subset <- dat[, c(1,i)]
+  dat_subset <- dat_subset[order(abs(dat_subset[2]), decreasing = TRUE), ]
+  dat_subset$Rank <- 1: length(dat_subset$GeneName)
+  dat_subset$refProfile_signedRanked <- sign(dat_subset[2]) * 
+    (length(dat_subset$GeneName) - dat_subset$Rank + 1)
+  dat_subset <- dat_subset[, -3]
+  dat_subset_Final <- dat_subset[which(dat_subset$GeneName %in% 
+                                         query_Sig$GeneName), ]
+  
+# Merge with signatures & Start Calculating ------------------------------------
+# Changed the query accordingly; either ordered or unordered (Line 59 & 60)
+  dat_merge <- left_join(dat_subset_Final, query_Sig_Ordered, by = "GeneName")
+  dat_merge$Signed_Rank <- dat_merge$Query_signedRank_Ordered * 
+    dat_merge$refProfile_signedRanked
+  sscMap_Output[i-1, 2] <- sum(dat_merge$Signed_Rank)
+  
+  print(i-1)
+}
+```
+
+#### Calculate sscMap Connectivity Score
+```{r}
+sscMap_Output$CScore <- sscMap_Output$Sum_SRank / max(sscMap_Output$Sum_SRank)
+
+sscMap_Output <- sscMap_Output[order(sscMap_Output$CScore, decreasing = TRUE), ]
+sscMap_Output$Rank <- 1:length(sscMap_Output$Sample)
+head(sscMap_Output)
+```
+
+#### Write the output
+```{r}
+write.csv(sscMap_Output, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/sscMap/_Talazoparib_sscMap_ordered_Tr08.csv", row.names = FALSE)
+```
+
+
+#### Compile GE for validation
+#### Load sen and resistant file names
+```{r}
+sen_file <- read.table("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Validation_set/Sen_validation.txt")
+res_file <- read.table("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Validation_set/Res_validation.txt")
+
+
+sen_GE_idx <- colnames(GDSC1000) %in% sen_file$V1
+sen_GE <- GDSC1000[, sen_GE_idx]
+
+res_GE_idx <- colnames(GDSC1000) %in% res_file$V1
+res_GE <- GDSC1000[, res_GE_idx]
+
+GE_combi <- cbind(sen_GE, res_GE)
+GE_combi$GeneName <- rownames(GE_combi)
+GE_combi <- GE_combi[, c(17, 1:16)]
+head(GE_combi)
+write.table(GE_combi, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Validation_set/Talazoparib_Validation_GE.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+```
+
+
+#### Load ref profile
+```{r}
+dat <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Validation_set/Talazoparib_Validation_GE.txt", header = TRUE, check.names = FALSE)
+```
+
+
+#### Create dummby table 
+```{r}
+sscMap_Output <- data.frame(matrix(data = NA, nrow = ncol(dat) - 1, ncol = 3))
+colnames(sscMap_Output) <- c("Sample", "Sum_SRank", "CScore")
+sscMap_Output$Sample <- names(dat[2:length(dat)])
+```
+
+#### Load signatures
+```{r}
+query_up_sscMap <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/__Core_UP_genes_FINAL.txt", header = TRUE)
+#query_up_sscMap$logFC <- 1
+
+query_dn_sscMap <- read.delim("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/__Core_DN_genes_FINAL.txt", header = TRUE)
+#query_dn_sscMap$logFC <- -1
+
+query_Sig <- bind_rows(query_up_sscMap, query_dn_sscMap)
+query_Sig$GeneName <- as.character(query_Sig$GeneName)
+query_Sig <- query_Sig[order(abs(query_Sig$logFC), decreasing = TRUE), ]
+
+query_Sig$Query_signedRank_Ordered <- sign(query_Sig$logFC) * (length(query_Sig$GeneName): 1)
+query_Sig_Ordered <- query_Sig[, -c(2,3)]
+```
+
+#### sscMap order analysis starts
+```{r}
+for (i in 2:length(dat)) {
+  dat_subset <- dat[, c(1,i)]
+  dat_subset <- dat_subset[order(abs(dat_subset[2]), decreasing = TRUE), ]
+  dat_subset$Rank <- 1: length(dat_subset$GeneName)
+  dat_subset$refProfile_signedRanked <- sign(dat_subset[2]) * 
+    (length(dat_subset$GeneName) - dat_subset$Rank + 1)
+  dat_subset <- dat_subset[, -3]
+  dat_subset_Final <- dat_subset[which(dat_subset$GeneName %in% 
+                                         query_Sig$GeneName), ]
+  
+# Merge with signatures & Start Calculating ------------------------------------
+# Changed the query accordingly; either ordered or unordered (Line 59 & 60)
+  dat_merge <- left_join(dat_subset_Final, query_Sig, by = "GeneName")
+  dat_merge$Signed_Rank <- dat_merge$Query_signedRank_Ordered * 
+    dat_merge$refProfile_signedRanked
+  sscMap_Output[i-1, 2] <- sum(dat_merge$Signed_Rank)
+  
+  print(i-1)
+}
+```
+
+#### Calculate sscMap Connectivity Score
+```{r}
+sscMap_Output$CScore <- sscMap_Output$Sum_SRank / max(sscMap_Output$Sum_SRank)
+
+sscMap_Output <- sscMap_Output[order(sscMap_Output$CScore, decreasing = TRUE), ]
+sscMap_Output$Rank <- 1:length(sscMap_Output$Sample)
+head(sscMap_Output)
+```
+
+#### Write the output
+```{r}
+write.csv(sscMap_Output, "~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Training_set/Output/sscMap/_Talazoparib_sscMap_ordered_VALIDATION2.csv", row.names = FALSE)
+```
+
+#### Coorelation
+```{r}
+dat <- read.table("~/OneDrive - Cancer Research Malaysia/Projects/2020/GDSC2/GDSC2/Talazoparib/Validation_set/Talazoparib_Validation_sscMap_FINAL.txt", header = TRUE)
+
+dat$Status = factor(dat$Status, levels = c("Sen", "Res"))
+
+ggplot(data = dat, aes(x = log10IC50, y = CScore)) +
+  geom_point(aes(colour = Status), size = 2) +
+  geom_hline(yintercept = 0.495, linetype = "dashed", color = "red", size = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  ggplot2::labs(y = "sscMap Score", x = expression('log'[10]*'IC'[50])) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+
+# Correlation and regression
+dat %>%
+  summarize(N = n(), r = cor(CScore, log10IC50))
+
+mod <- lm(formula = CScore ~ log10IC50, data = dat)
+summary(mod)
+```
+
+
+
+
+
+#### All Lines
+```{r}
+All_Lines <- read_csv("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/talazoparib_GDSC2.csv")
+```
+
+#### Clean data
+```{r}
+blood_idx <- which(All_Lines$Tissue == "blood")
+All_Lines_CLEAN <- All_Lines[-blood_idx, ]
+```
+
+#### Split data
+```{r}
+percent_30 <- sample(x = 1:nrow(All_Lines_CLEAN), size = nrow(All_Lines_CLEAN)* 0.3, replace = FALSE)
+percent_30_lines <- All_Lines_CLEAN[percent_30, ]
+write_delim(percent_30_lines, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Validation/Talazoparib_Validation30.txt", delim = "\t")
+
+percent_70_lines <- All_Lines_CLEAN[-percent_30, ]
+```
+
+#### Training data - 70 percent
+```{r}
+range(percent_70_lines$IC50)
+percent_70_lines <- percent_70_lines[order(percent_70_lines$AUC), ]
+
+# Quantile analysis, 5% and 95%
+Q = quantile(percent_70_lines$AUC, c(0.05,0.95))
+
+# Sen
+sen <- subset(percent_70_lines, AUC < Q[1])
+range(sen$IC50)
+sen <- sen %>%
+  filter(IC50 < 1)
+
+# Res
+res <- subset(percent_70_lines, AUC > Q[2])
+range(res$IC50)
+
+# Sen splitting 70%, 30%
+sen_30_idx <- sample(x = 1:nrow(sen), size = nrow(sen) * 0.3, replace = FALSE)
+sen_30_lines <- sen[sen_30_idx, ]
+
+res_30_idx <- sample(x = 1:nrow(res), size = nrow(res) * 0.3, replace = FALSE)
+res_30_lines <- res[res_30_idx, ]
+
+merge_30 <- bind_rows(sen_30_lines, res_30_lines)
+write_delim(merge_30, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent30/Validation_10.txt", delim = "\t")
+
+# 70%
+sen_70_lines <- sen[-sen_30_idx, ] #10
+res_70_lines <- res[-res_30_idx, ] #16
+merge_70 <- bind_rows(sen_70_lines, res_70_lines)
+write_delim(merge_70, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/training_10.txt", delim = "\t")
+```
+
+### Load GDSC 1000 gene expression data
+```{r}
+GDSC1000 <- read.delim("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC1000_GE_original_collapsed_edited_WC.txt", header = TRUE, check.names = FALSE, row.names = 1)
+```
+
+#### Load training file names
+```{r}
+training_file <- list.files(path = "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70", pattern = ".txt", full.names = TRUE)
+```
+
+#### limma analysis
+```{r}
+training <- read_delim(training_file[10], delim = "\t")
+
+Sen_Lines <- training %>%
+  filter(IC50 < 1) %>%
+  select('Cell line')
+names(Sen_Lines) <- "Cell_Line"
+
+Res_Lines <- training %>%
+  filter(IC50 > 1) %>%
+  select('Cell line')
+names(Res_Lines) <- "Cell_Line"
+
+sen_GE_idx <- colnames(GDSC1000) %in% Sen_Lines$Cell_Line
+sen_GE <- GDSC1000[, sen_GE_idx]
+
+res_GE_idx <- colnames(GDSC1000) %in% Res_Lines$Cell_Line
+res_GE <- GDSC1000[, res_GE_idx]
+
+GE_combi <- cbind(sen_GE, res_GE)
+
+library(limma)
+
+sampl <- factor(c(rep("Sensitive", 15), rep("Resistant", 16)))
+design.mat <- model.matrix(~0 +sampl)
+colnames(design.mat) <- levels(sampl)
+design.mat
+
+contrast.mat <- makeContrasts(
+  Diff = Sensitive - Resistant,
+  levels = design.mat
+)
+contrast.mat
+
+fit <- lmFit(GE_combi, design.mat)
+fit2 <- contrasts.fit(fit, contrast.mat)
+fit3 <- eBayes(fit2)
+
+DEG <- topTable(fit3, coef = 'Diff', number = nrow(GE_combi), adjust.method = 'fdr', sort.by = 't')
+DEG$GeneName <- rownames(DEG)
+DEG <- DEG[, c(7, 1:6)]
+
+write.table(DEG, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/_Talazoparib_training_10.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+```
+
+#### DEG identification
+```{r}
+# Read in the files
+GSE <- read.delim("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/_Talazoparib_training_10.txt", header = TRUE, row.names = 1)
+head(GSE)
+GSE$lgtranspvalue <- -log10(GSE$P.Value)
+head(GSE)
+
+par(pch = 16)
+par(pty = "s")
+
+# Plotting the figures
+plot(GSE$logFC, GSE$lgtranspvalue, main='Dabrafenib - Sensitive (10) vs Resistant (16)', xlab=expression('lg'[2]*'FC'), ylab=expression('-lg'[10]*'pvalue'),cex.lab=1.2)
+with(subset(GSE, logFC < 0 & lgtranspvalue >= (2/-logFC)), points(logFC,lgtranspvalue, col = "red"))
+with(subset(GSE, logFC > 0 & lgtranspvalue >= (2/logFC)), points(logFC,lgtranspvalue, col = "blue"))
+
+# Add legend
+#legend("bottomright",legend=c(expression(paste('DOWN: lg'[2]*'FC<0 & -lg'[10]*'pvalue>=(2/-lg'[2]*'FC)')), expression(paste('UP: lg'[2]*'FC>0 & -lg'[10]*'pvalue>=(2/lg'[2]*'FC)'))),pch = 16, col=c("red", "blue"))
+
+# Draw lines -------------------------------------------------------------------
+xpos <- seq(0, 6, 0.01)
+xneg <- seq(-4, 0, 0.01)
+points(xpos, 2/xpos, type="l")
+points(xneg, -2/xneg, type="l")
+
+# Save down-regulated genes ----------------------------------------------------
+GSE_DOWN <- subset(GSE, logFC < 0 & -log10(P.Value)>=(2/-logFC) , select=c(logFC, P.Value))
+GSE_DOWN <- GSE_DOWN[order(GSE_DOWN$logFC), ]
+nrow(GSE_DOWN)
+GSE_DOWN$GeneName <- rownames(GSE_DOWN)
+GSE_DOWN <- GSE_DOWN[, c(3, 1:2)]
+head(GSE_DOWN)
+write.table(GSE_DOWN, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/_Talazoparib_training_limma_DOWN10.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+
+# Save up-regulated genes ------------------------------------------------------
+GSE_UP <- subset(GSE, logFC > 0 & -log10(P.Value)>=(2/logFC) , select=c(logFC, P.Value))
+GSE_UP <- GSE_UP[order(GSE_UP$logFC, decreasing = TRUE), ]
+nrow(GSE_UP)
+GSE_UP$GeneName <- rownames(GSE_UP)
+GSE_UP <- GSE_UP[, c(3, 1:2)]
+head(GSE_UP)
+write.table(GSE_UP, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/_talazoparib_training_limma_UP10.txt", quote = FALSE, sep = '\t', row.names = FALSE)
+```
+
+## Core genes
+```{r}
+dn_files <- list.files("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/limma_DN", pattern = ".txt", full.names = TRUE)
+up_files <- list.files("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/limma_UP", pattern = ".txt", full.names = TRUE)
+
+master <- read.delim(dn_files[1])
+master$Down1 <- "1"
+master <- master[, -c(2:3)]
+
+# Subsequent dn files
+dn_dn <- read.delim(dn_files[10])
+dn_dn$Down10 <- "1"
+dn_dn <- dn_dn[, -c(2:3)]
+
+
+# Merge dn genes
+#master_dn <- full_join(master, dn_dn)
+master_dn <- full_join(master_dn, dn_dn)
+
+# Remove NA dn genes
+master_dn[is.na(master_dn)] <- "0"
+write.table(master_dn, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/__Talazoparib_Core_DN_genes.txt", row.names = TRUE, sep = "\t", quote = FALSE)
+
+master <- read.delim(up_files[1])
+master$Up1 <- "1"
+master <- master[, -c(2:3)]
+
+# Subsequent dn files
+up_up <- read.delim(up_files[10])
+up_up$Up10 <- "1"
+up_up <- up_up[, -c(2:3)]
+
+# Merge dn genes
+#master_up <- full_join(master, up_up)
+master_up <- full_join(master_up, up_up)
+
+# Remove NA dn genes
+master_up[is.na(master_up)] <- "0"
+write.table(master_up, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/__Talazoparib_Core_UP_genes.txt", row.names = FALSE, sep = "\t", quote = FALSE)
+```
+
+
+#### validation
+#### Load sen and resistant file names
+```{r}
+Validation_Lines <- read_delim("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Validation/Talazoparib_Validation30.txt", delim = "\t")
+```
+
+#### Validation set GE
+```{r}
+Validation_NAME <- Validation_Lines %>%
+  select("Cell line")
+names(Validation_NAME) <- "Cell_Line"
+
+Validation_GE_idx <- colnames(GDSC1000) %in% Validation_NAME$Cell_Line
+Validation_GE <- GDSC1000[, Validation_GE_idx]
+Validation_GE$GeneName <- rownames(Validation_GE)
+Validation_GE <- Validation_GE[, c(181, 1:180)]
+
+write_delim(Validation_GE, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Validation/_Talazoparib_validation_GE.txt", delim = "\t")
+```
+
+#### Training
+```{r}
+#Validation_Name <- list.files("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent30", pattern = ".txt", full.names = TRUE)
+
+Val <- read_delim(Validation_Name[10], delim = "\t")
+Val_NAME <- Val %>%
+  select('Cell line')
+Val_idx <- colnames(GDSC1000) %in% Val_NAME$`Cell line`
+Val_GE <- GDSC1000[, Val_idx]
+Val_GE$GeneName <- rownames(Val_GE)
+Val_GE <- Val_GE[, c(ncol(Val_GE), 1:ncol(Val_GE)-1)]
+write.table(Val_GE, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent30/GE/Val_10_GE.txt", row.names = TRUE, quote = FALSE, sep = "\t")
+```
+
+#### sscMap analysis
+#### Load training GE
+```{r}
+dat <- read.delim("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent30/GE/Val_10_GE.txt", header = TRUE, check.names = FALSE)
+```
+
+#### Create dummby table 
+```{r}
+sscMap_Output <- data.frame(matrix(data = NA, nrow = ncol(dat) - 1, ncol = 3))
+colnames(sscMap_Output) <- c("Sample", "Sum_SRank", "CScore")
+sscMap_Output$Sample <- names(dat[2:length(dat)])
+```
+
+#### Load signatures
+```{r}
+query_up_sscMap <- read.delim("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/limma_UP/_talazoparib_training_limma_UP10.txt", header = TRUE)
+#query_up_sscMap$logFC <- 1
+query_up_sscMap <- query_up_sscMap[, c(1:2)]
+#query_Sig <- query_up_sscMap
+
+query_dn_sscMap <- read.delim("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent70/limma_DN/_Talazoparib_training_limma_DOWN10.txt", header = TRUE)
+#query_dn_sscMap$logFC <- -1
+query_dn_sscMap <- query_dn_sscMap[, c(1:2)]
+#query_Sig <- query_dn_sscMap
+
+query_Sig <- bind_rows(query_up_sscMap, query_dn_sscMap)
+query_Sig$GeneName <- as.character(query_Sig$GeneName)
+query_Sig <- query_Sig[order(abs(query_Sig$logFC), decreasing = TRUE), ]
+
+query_Sig$Query_signedRank_Ordered <- sign(query_Sig$logFC) * (length(query_Sig$GeneName): 1)
+#query_Sig_Ordered <- query_Sig[, -c(2,3)]
+```
+
+#### sscMap order analysis starts
+```{r}
+for (i in 2:length(dat)) {
+  dat_subset <- dat[, c(1,i)]
+  dat_subset <- dat_subset[order(abs(dat_subset[2]), decreasing = TRUE), ]
+  dat_subset$Rank <- 1: length(dat_subset$GeneName)
+  dat_subset$refProfile_signedRanked <- sign(dat_subset[2]) * 
+    (length(dat_subset$GeneName) - dat_subset$Rank + 1)
+  dat_subset <- dat_subset[, -3]
+  dat_subset_Final <- dat_subset[which(dat_subset$GeneName %in% 
+                                         query_Sig$GeneName), ]
+  
+  # Merge with signatures & Start Calculating ------------------------------------
+  # Changed the query accordingly; either ordered or unordered (Line 59 & 60)
+  dat_merge <- left_join(dat_subset_Final, query_Sig, by = "GeneName")
+  dat_merge$Signed_Rank <- dat_merge$Query_signedRank_Ordered * 
+    dat_merge$refProfile_signedRanked
+  sscMap_Output[i-1, 2] <- sum(dat_merge$Signed_Rank)
+  
+  print(i-1)
+}
+```
+
+#### Calculate sscMap Connectivity Score
+```{r}
+sscMap_Output$CScore <- sscMap_Output$Sum_SRank / max(sscMap_Output$Sum_SRank)
+head(sscMap_Output)
+sscMap_Output$log10_Sum_SRank <- log10(sscMap_Output$Sum_SRank)
+sscMap_Output <- sscMap_Output[order(sscMap_Output$log10_Sum_SRank, decreasing = TRUE), ]
+sscMap_Output$Rank <- 1:length(sscMap_Output$Sample)
+head(sscMap_Output)
+```
+
+#### Write the output
+```{r}
+write.csv(sscMap_Output, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Percent30/sscMap/sscMap_logFC/_Talazoparib_sscMap_percent30_logFC_10.csv", row.names = FALSE)
+```
+
+#### Coorelation
+```{r}
+dat <- read.table("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/All/Validation/__WC_Talazoparib_sscMap_Validation_compiled.txt", header = TRUE, check.names = FALSE)
+#dat$log10_IC50 <- log10(dat$IC50)
+
+dat$Status <- factor(dat$Status, levels = c("Sen", "Intermediate", "Res"))
+
+ggplot(data = dat, aes(x = log10_IC50, y = log10_Sum_SRank)) +
+  geom_point(aes(colour = Status), size = 2) +
+  geom_hline(yintercept = 9.524641, linetype = "dashed", color = "red", size = 0.5) +
+  geom_smooth(method = "lm", se = FALSE) +
+  ggplot2::labs(y = expression('log'[10]*'sscMap Sum Srank'), x = expression('log'[10]*'IC'[50])) +
+  theme_bw() +
+  theme(aspect.ratio = 1)
+
+# Correlation and regression
+ dat %>%
+  summarize(N = n(), r = cor(log10_Sum_SRank, log10_IC50))
+
+mod <- lm(formula = log10_Sum_SRank ~ log10_IC50, data = dat)
+summary(mod)
+```
+
+#### Breast
+```{r}
+breast_idx <- which(All_Lines$Tissue == "breast")
+Breast_Lines_CLEAN <- All_Lines[breast_idx, ]
+
+breast_sen <- Breast_Lines_CLEAN %>%
+  filter(IC50 < 10) %>%
+  select('Cell line')
+breast_sen_GE <- GDSC1000[, which(colnames(GDSC1000) %in% breast_sen$`Cell line`)]
+breast_sen_GE$GeneName <- rownames(breast_sen_GE)
+
+breast_res <- Breast_Lines_CLEAN %>%
+  filter(IC50 > 100) %>%
+  select('Cell line')
+breast_res_GE <- GDSC1000[, which(colnames(GDSC1000) %in% breast_res$`Cell line`)]
+breast_res_GE$GeneName <- rownames(breast_res_GE)
+
+breast_GE_combi <- full_join(breast_sen_GE, breast_res_GE)
+breast_GE_combi <- breast_GE_combi[, c(4, 1:3, 5:ncol(breast_GE_combi))]
+rownames(breast_GE_combi) <- breast_GE_combi$GeneName
+breast_GE_combi <- breast_GE_combi[, -1]
+```
+
+#### limma
+```{r}
+library(limma)
+
+sampl <- factor(c(rep("Sensitive", 3), rep("Resistant", 15)))
+design.mat <- model.matrix(~0 +sampl)
+colnames(design.mat) <- levels(sampl)
+design.mat
+
+contrast.mat <- makeContrasts(
+  Diff = Sensitive - Resistant,
+  levels = design.mat
+)
+contrast.mat
+
+fit <- lmFit(breast_GE_combi, design.mat)
+fit2 <- contrasts.fit(fit, contrast.mat)
+fit3 <- eBayes(fit2)
+
+DEG <- topTable(fit3, coef = 'Diff', number = nrow(GE_combi), adjust.method = 'fdr', sort.by = 't')
+DEG$GeneName <- rownames(DEG)
+DEG <- DEG[, c(7, 1:6)]
+
+write_delim(DEG, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Breast/_Talazoparib_breast_limma.txt", delim = "\t")
+```
+
+#### DEG identification
+```{r}
+# Read in the files
+GSE <- read.table("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Breast/_Talazoparib_breast_limma.txt", header = TRUE, row.names = 1)
+head(GSE)
+
+GSE$lgtranspvalue <- -log10(GSE$P.Value)
+head(GSE)
+
+par(pch = 16)
+par(pty = "s")
+
+# Plotting the figures
+plot(GSE$logFC, GSE$lgtranspvalue, main='Talazoparib - Sensitive (n = 3, < 10µM) vs Resistant (n = 15, > 100µM)', xlab=expression('lg'[2]*'FC'), ylab=expression('-lg'[10]*'pvalue'),cex.lab=1.2)
+with(subset(GSE, logFC < 0 & lgtranspvalue >= (2/-logFC)), points(logFC,lgtranspvalue, col = "red"))
+with(subset(GSE, logFC > 0 & lgtranspvalue >= (2/logFC)), points(logFC,lgtranspvalue, col = "blue"))
+
+# Add legend
+#legend("bottomright",legend=c(expression(paste('DOWN: lg'[2]*'FC<0 & -lg'[10]*'pvalue>=(2/-lg'[2]*'FC)')), expression(paste('UP: lg'[2]*'FC>0 & -lg'[10]*'pvalue>=(2/lg'[2]*'FC)'))),pch = 16, col=c("red", "blue"))
+
+# Draw lines -------------------------------------------------------------------
+xpos <- seq(0, 3.5, 0.01)
+xneg <- seq(-6, 0, 0.01)
+points(xpos, 2/xpos, type="l")
+points(xneg, -2/xneg, type="l")
+
+# Save down-regulated genes ----------------------------------------------------
+GSE_DOWN <- subset(GSE, logFC < 0 & -log10(P.Value)>=(2/-logFC) , select=c(logFC, P.Value))
+GSE_DOWN <- GSE_DOWN[order(GSE_DOWN$logFC), ]
+nrow(GSE_DOWN)
+GSE_DOWN$GeneName <- rownames(GSE_DOWN)
+GSE_DOWN <- GSE_DOWN[, c(3, 1:2)]
+head(GSE_DOWN)
+write_delim(GSE_DOWN, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Breast/_talazoparib_breast_limma_DN.txt", delim = "\t")
+
+# Save up-regulated genes ------------------------------------------------------
+GSE_UP <- subset(GSE, logFC > 0 & -log10(P.Value)>=(2/logFC) , select=c(logFC, P.Value))
+GSE_UP <- GSE_UP[order(GSE_UP$logFC, decreasing = TRUE), ]
+nrow(GSE_UP)
+GSE_UP$GeneName <- rownames(GSE_UP)
+GSE_UP <- GSE_UP[, c(3, 1:2)]
+head(GSE_UP)
+write_delim(GSE_UP, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Breast/_talazoparib_breast_limma_UP.txt", delim = "\t")
+```
+
+#### Ovarian
+```{r}
+ovarian_idx <- which(All_Lines$`Tissue sub-type` == "ovary")
+ovarian_Lines_CLEAN <- All_Lines[ovarian_idx, ]
+
+ovarian_sen <- ovarian_Lines_CLEAN %>%
+  filter(IC50 < 10) %>%
+  select('Cell line')
+ovarian_sen_GE <- GDSC1000[, which(colnames(GDSC1000) %in% ovarian_sen$`Cell line`)]
+ovarian_sen_GE$GeneName <- rownames(ovarian_sen_GE)
+
+ovarian_res <- ovarian_Lines_CLEAN %>%
+  filter(IC50 > 100) %>%
+  select('Cell line')
+ovarian_res_GE <- GDSC1000[, which(colnames(GDSC1000) %in% ovarian_res$`Cell line`)]
+ovarian_res_GE$GeneName <- rownames(ovarian_res_GE)
+
+ovarian_GE_combi <- full_join(ovarian_sen_GE, ovarian_res_GE)
+ovarian_GE_combi <- ovarian_GE_combi[, c(13, 1:12, 14:ncol(ovarian_GE_combi))]
+rownames(ovarian_GE_combi) <- ovarian_GE_combi$GeneName
+ovarian_GE_combi <- ovarian_GE_combi[, -1]
+```
+
+#### limma
+```{r}
+library(limma)
+
+sampl <- factor(c(rep("Sensitive", 12), rep("Resistant", 11)))
+design.mat <- model.matrix(~0 +sampl)
+colnames(design.mat) <- levels(sampl)
+design.mat
+
+contrast.mat <- makeContrasts(
+  Diff = Sensitive - Resistant,
+  levels = design.mat
+)
+contrast.mat
+
+fit <- lmFit(ovarian_GE_combi, design.mat)
+fit2 <- contrasts.fit(fit, contrast.mat)
+fit3 <- eBayes(fit2)
+
+DEG <- topTable(fit3, coef = 'Diff', number = nrow(GE_combi), adjust.method = 'fdr', sort.by = 't')
+DEG$GeneName <- rownames(DEG)
+DEG <- DEG[, c(7, 1:6)]
+
+write_delim(DEG, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ovarian/_Talazoparib_ovarian_limma.txt", delim = "\t")
+```
+
+#### DEG identification
+```{r}
+# Read in the files
+GSE <- read.table("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ovarian/_Talazoparib_ovarian_limma.txt", header = TRUE, row.names = 1)
+head(GSE)
+
+GSE$lgtranspvalue <- -log10(GSE$P.Value)
+head(GSE)
+
+par(pch = 16)
+par(pty = "s")
+
+# Plotting the figures
+plot(GSE$logFC, GSE$lgtranspvalue, main='Ovarian: Talazoparib - Sensitive (n = 12, < 10µM) vs Resistant (n = 11, > 100µM)', xlab=expression('lg'[2]*'FC'), ylab=expression('-lg'[10]*'pvalue'),cex.lab=1.2)
+with(subset(GSE, logFC < 0 & lgtranspvalue >= (2/-logFC)), points(logFC,lgtranspvalue, col = "red"))
+with(subset(GSE, logFC > 0 & lgtranspvalue >= (2/logFC)), points(logFC,lgtranspvalue, col = "blue"))
+
+# Add legend
+#legend("bottomright",legend=c(expression(paste('DOWN: lg'[2]*'FC<0 & -lg'[10]*'pvalue>=(2/-lg'[2]*'FC)')), expression(paste('UP: lg'[2]*'FC>0 & -lg'[10]*'pvalue>=(2/lg'[2]*'FC)'))),pch = 16, col=c("red", "blue"))
+
+# Draw lines -------------------------------------------------------------------
+xpos <- seq(0, 3.2, 0.01)
+xneg <- seq(-4, 0, 0.01)
+points(xpos, 2/xpos, type="l")
+points(xneg, -2/xneg, type="l")
+
+# Save down-regulated genes ----------------------------------------------------
+GSE_DOWN <- subset(GSE, logFC < 0 & -log10(P.Value)>=(2/-logFC) , select=c(logFC, P.Value))
+GSE_DOWN <- GSE_DOWN[order(GSE_DOWN$logFC), ]
+nrow(GSE_DOWN)
+GSE_DOWN$GeneName <- rownames(GSE_DOWN)
+GSE_DOWN <- GSE_DOWN[, c(3, 1:2)]
+head(GSE_DOWN)
+write_delim(GSE_DOWN, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ovarian/_talazoparib_ovarian_limma_DN.txt", delim = "\t")
+
+# Save up-regulated genes ------------------------------------------------------
+GSE_UP <- subset(GSE, logFC > 0 & -log10(P.Value)>=(2/logFC) , select=c(logFC, P.Value))
+GSE_UP <- GSE_UP[order(GSE_UP$logFC, decreasing = TRUE), ]
+nrow(GSE_UP)
+GSE_UP$GeneName <- rownames(GSE_UP)
+GSE_UP <- GSE_UP[, c(3, 1:2)]
+head(GSE_UP)
+write_delim(GSE_UP, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ovarian/_talazoparib_ovarian_limma_UP.txt", delim = "\t")
+```
+
+#### Pancreas
+```{r}
+pancreas_idx <- which(All_Lines$`Tissue sub-type` == "pancreas")
+pancreas_Lines_CLEAN <- All_Lines[pancreas_idx, ]
+
+pancreas_sen <- pancreas_Lines_CLEAN %>%
+  filter(IC50 < 10) %>%
+  select('Cell line')
+pancreas_sen_GE <- GDSC1000[, which(colnames(GDSC1000) %in% pancreas_sen$`Cell line`)]
+pancreas_sen_GE$GeneName <- rownames(pancreas_sen_GE)
+
+pancreas_res <- pancreas_Lines_CLEAN %>%
+  filter(IC50 > 100) %>%
+  select('Cell line')
+pancreas_res_GE <- GDSC1000[, which(colnames(GDSC1000) %in% pancreas_res$`Cell line`)]
+pancreas_res_GE$GeneName <- rownames(pancreas_res_GE)
+
+pancreas_GE_combi <- full_join(pancreas_sen_GE, pancreas_res_GE)
+pancreas_GE_combi <- pancreas_GE_combi[, c(4, 1:3, 5:ncol(pancreas_GE_combi))]
+rownames(pancreas_GE_combi) <- pancreas_GE_combi$GeneName
+pancreas_GE_combi <- pancreas_GE_combi[, -1]
+```
+
+#### limma
+```{r}
+library(limma)
+
+sampl <- factor(c(rep("Sensitive", 3), rep("Resistant", 13)))
+design.mat <- model.matrix(~0 +sampl)
+colnames(design.mat) <- levels(sampl)
+design.mat
+
+contrast.mat <- makeContrasts(
+  Diff = Sensitive - Resistant,
+  levels = design.mat
+)
+contrast.mat
+
+fit <- lmFit(pancreas_GE_combi, design.mat)
+fit2 <- contrasts.fit(fit, contrast.mat)
+fit3 <- eBayes(fit2)
+
+DEG <- topTable(fit3, coef = 'Diff', number = nrow(GE_combi), adjust.method = 'fdr', sort.by = 't')
+DEG$GeneName <- rownames(DEG)
+DEG <- DEG[, c(7, 1:6)]
+
+write_delim(DEG, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Pancreas/_Talazoparib_pancreas_limma.txt", delim = "\t")
+```
+
+#### DEG identification
+```{r}
+# Read in the files
+GSE <- read.table("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Pancreas/_Talazoparib_pancreas_limma.txt", header = TRUE, row.names = 1)
+head(GSE)
+
+GSE$lgtranspvalue <- -log10(GSE$P.Value)
+head(GSE)
+
+par(pch = 16)
+par(pty = "s")
+
+# Plotting the figures
+plot(GSE$logFC, GSE$lgtranspvalue, main='Pancreas: Talazoparib - Sensitive (n = 3, < 10µM) vs Resistant (n = 13, > 100µM)', xlab=expression('lg'[2]*'FC'), ylab=expression('-lg'[10]*'pvalue'),cex.lab=1.2)
+with(subset(GSE, logFC < 0 & lgtranspvalue >= (2/-logFC)), points(logFC,lgtranspvalue, col = "red"))
+with(subset(GSE, logFC > 0 & lgtranspvalue >= (2/logFC)), points(logFC,lgtranspvalue, col = "blue"))
+
+# Add legend
+#legend("bottomright",legend=c(expression(paste('DOWN: lg'[2]*'FC<0 & -lg'[10]*'pvalue>=(2/-lg'[2]*'FC)')), expression(paste('UP: lg'[2]*'FC>0 & -lg'[10]*'pvalue>=(2/lg'[2]*'FC)'))),pch = 16, col=c("red", "blue"))
+
+# Draw lines -------------------------------------------------------------------
+xpos <- seq(0, 6.5, 0.01)
+xneg <- seq(-3, 0, 0.01)
+points(xpos, 2/xpos, type="l")
+points(xneg, -2/xneg, type="l")
+
+# Save down-regulated genes ----------------------------------------------------
+GSE_DOWN <- subset(GSE, logFC < 0 & -log10(P.Value)>=(2/-logFC) , select=c(logFC, P.Value))
+GSE_DOWN <- GSE_DOWN[order(GSE_DOWN$logFC), ]
+nrow(GSE_DOWN)
+GSE_DOWN$GeneName <- rownames(GSE_DOWN)
+GSE_DOWN <- GSE_DOWN[, c(3, 1:2)]
+head(GSE_DOWN)
+write_delim(GSE_DOWN, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Pancreas/_talazoparib_pancreas_limma_DN.txt", delim = "\t")
+
+# Save up-regulated genes ------------------------------------------------------
+GSE_UP <- subset(GSE, logFC > 0 & -log10(P.Value)>=(2/logFC) , select=c(logFC, P.Value))
+GSE_UP <- GSE_UP[order(GSE_UP$logFC, decreasing = TRUE), ]
+nrow(GSE_UP)
+GSE_UP$GeneName <- rownames(GSE_UP)
+GSE_UP <- GSE_UP[, c(3, 1:2)]
+head(GSE_UP)
+write_delim(GSE_UP, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Pancreas/_talazoparib_pancreas_limma_UP.txt", delim = "\t")
+```
+
+#### Ewings
+```{r}
+ewings_idx <- which(All_Lines$`Tissue sub-type` == "ewings_sarcoma")
+ewings_Lines_CLEAN <- All_Lines[ewings_idx, ]
+
+ewings_sen <- ewings_Lines_CLEAN %>%
+  filter(IC50 < 1) %>%
+  select('Cell line')
+ewings_sen_GE <- GDSC1000[, which(colnames(GDSC1000) %in% ewings_sen$`Cell line`)]
+ewings_sen_GE$GeneName <- rownames(ewings_sen_GE)
+
+ewings_res <- ewings_Lines_CLEAN %>%
+  filter(IC50 > 1) %>%
+  select('Cell line')
+ewings_res_GE <- GDSC1000[, which(colnames(GDSC1000) %in% ewings_res$`Cell line`)]
+ewings_res_GE$GeneName <- rownames(ewings_res_GE)
+
+ewings_GE_combi <- full_join(ewings_sen_GE, ewings_res_GE)
+ewings_GE_combi <- ewings_GE_combi[, c(13, 1:12, 14:ncol(ewings_GE_combi))]
+rownames(ewings_GE_combi) <- ewings_GE_combi$GeneName
+ewings_GE_combi <- ewings_GE_combi[, -1]
+```
+
+#### limma
+```{r}
+library(limma)
+
+sampl <- factor(c(rep("Sensitive", 12), rep("Resistant", 6)))
+design.mat <- model.matrix(~0 +sampl)
+colnames(design.mat) <- levels(sampl)
+design.mat
+
+contrast.mat <- makeContrasts(
+  Diff = Sensitive - Resistant,
+  levels = design.mat
+)
+contrast.mat
+
+fit <- lmFit(ewings_GE_combi, design.mat)
+fit2 <- contrasts.fit(fit, contrast.mat)
+fit3 <- eBayes(fit2)
+
+DEG <- topTable(fit3, coef = 'Diff', number = nrow(GE_combi), adjust.method = 'fdr', sort.by = 't')
+DEG$GeneName <- rownames(DEG)
+DEG <- DEG[, c(7, 1:6)]
+
+write_delim(DEG, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ewings/_Talazoparib_ewings_limma.txt", delim = "\t")
+```
+
+#### DEG identification
+```{r}
+# Read in the files
+GSE <- read.table("/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ewings/_Talazoparib_ewings_limma.txt", header = TRUE, row.names = 1)
+head(GSE)
+
+GSE$lgtranspvalue <- -log10(GSE$P.Value)
+head(GSE)
+
+par(pch = 16)
+par(pty = "s")
+
+# Plotting the figures
+plot(GSE$logFC, GSE$lgtranspvalue, main='Ewings: Talazoparib - Sensitive (n = 12, < 1µM) vs Resistant (n = 6, > 1µM)', xlab=expression('lg'[2]*'FC'), ylab=expression('-lg'[10]*'pvalue'),cex.lab=1.2)
+with(subset(GSE, logFC < 0 & lgtranspvalue >= (2/-logFC)), points(logFC,lgtranspvalue, col = "red"))
+with(subset(GSE, logFC > 0 & lgtranspvalue >= (2/logFC)), points(logFC,lgtranspvalue, col = "blue"))
+
+# Add legend
+#legend("bottomright",legend=c(expression(paste('DOWN: lg'[2]*'FC<0 & -lg'[10]*'pvalue>=(2/-lg'[2]*'FC)')), expression(paste('UP: lg'[2]*'FC>0 & -lg'[10]*'pvalue>=(2/lg'[2]*'FC)'))),pch = 16, col=c("red", "blue"))
+
+# Draw lines -------------------------------------------------------------------
+xpos <- seq(0, 3.5, 0.01)
+xneg <- seq(-3.5, 0, 0.01)
+points(xpos, 2/xpos, type="l")
+points(xneg, -2/xneg, type="l")
+
+# Save down-regulated genes ----------------------------------------------------
+GSE_DOWN <- subset(GSE, logFC < 0 & -log10(P.Value)>=(2/-logFC) , select=c(logFC, P.Value))
+GSE_DOWN <- GSE_DOWN[order(GSE_DOWN$logFC), ]
+nrow(GSE_DOWN)
+GSE_DOWN$GeneName <- rownames(GSE_DOWN)
+GSE_DOWN <- GSE_DOWN[, c(3, 1:2)]
+head(GSE_DOWN)
+write_delim(GSE_DOWN, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ewings/_talazoparib_ewings_limma_DN.txt", delim = "\t")
+
+# Save up-regulated genes ------------------------------------------------------
+GSE_UP <- subset(GSE, logFC > 0 & -log10(P.Value)>=(2/logFC) , select=c(logFC, P.Value))
+GSE_UP <- GSE_UP[order(GSE_UP$logFC, decreasing = TRUE), ]
+nrow(GSE_UP)
+GSE_UP$GeneName <- rownames(GSE_UP)
+GSE_UP <- GSE_UP[, c(3, 1:2)]
+head(GSE_UP)
+write_delim(GSE_UP, "/Volumes/bernard_MacBook/Projects/2020/NEW/GDSC2/GDSC2/Talazoparib/NEW/Ewings/_talazoparib_ewings_limma_UP.txt", delim = "\t")
+```
+
